@@ -1,0 +1,369 @@
+---
+title: "NYPD"
+author: 
+date: "2025-03-03"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Libaries
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(xgboost)
+library(caret)
+library(pROC)
+library(ROCR)
+library(reshape2)
+```
+
+# **Introduction**
+
+## The data contains NYPD shooting historical data
+## The task is to evaluate the data to see if we can identify any associations between fatal shootings and time of day, date, borough, or sex
+
+# **Import the Data**
+ 
+```{r}
+# Import data
+data = read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+```{r}
+# Create a quick summary of the data
+summary(data)
+```
+
+# **Data Preparation and Transformation**
+
+## There are data and time columns that are character values. This needs to be string values. 
+
+
+```{r}
+# Change date and time from chr to a string and creates a new combined column
+data$OCCUR_DATE = as.Date(data$OCCUR_DATE, format = "%m/%d/%Y")
+data$DATETIME = as.POSIXct(paste(data$OCCUR_DATE, data$OCCUR_TIME), 
+                            format = "%Y-%m-%d %H:%M:%S")
+# Move DATETIME to the front by reordering all columns
+data = data[, c("DATETIME", setdiff(names(data), "DATETIME"))]
+
+# Remove the original data and time columns
+data$OCCUR_DATE = NULL
+data$OCCUR_TIME = NULL
+```
+
+### Preparation: Evaluate the missing data
+
+```{r}
+# Total missing
+sum(is.na(data))
+
+# Missing by column
+colSums(is.na(data)) 
+
+# Percent missing
+missing_percent = colMeans(is.na(data)) * 100
+print(missing_percent)  
+
+```
+### Some of the columns have about 21% of missing data. The ways to handle this would be to impute the data. With this much missing data, this could introduce bias. Imputation would work better with continuous variables.The best way to handle this data would be to remove the missing data.If we remove the rows with the missing data, we will remove 61 rows, 0.21% of the data, preserving 99.79% of the data.   
+
+### Preparation: Remove Missing Data
+```{r}
+# remove the rows with na
+data_clean = na.omit(data)
+```
+
+```{r}
+summary(data_clean)
+```
+
+```{r}
+# Add year column
+data_clean$year = year(data_clean$DATETIME)
+
+# quick check to ensure it worked
+head(data_clean[, c("DATETIME", "year")])
+```
+# **Exploratory Data Analysis**
+
+```{r}
+# Summarize shootings by year
+trends = data_clean %>% 
+  group_by(year) %>% 
+  summarise(n_shootings = n())
+
+# Plot
+ggplot(trends, aes(x = year, y = n_shootings)) +
+  geom_line() + geom_point() +
+  labs(title = "NYPD Shootings by Year (2006-2022)", 
+       x = "Year", 
+       y = "Number of Incidents") +
+  theme_minimal()
+```
+
+```{r}
+# Summarize by borough
+boro_trends = data_clean %>% 
+  group_by(BORO) %>% 
+  summarise(n_shootings = n())
+
+# Bar plot
+ggplot(boro_trends, aes(x = reorder(BORO, -n_shootings), y = n_shootings)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "NYPD Shootings by Borough", 
+       x = "Borough", 
+       y = "Number of Incidents") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Summarize fatalities by year
+fatality_trends = data_clean %>% 
+  group_by(year, STATISTICAL_MURDER_FLAG) %>% 
+  summarise(n = n(), .groups = "drop")
+
+# Plot
+ggplot(fatality_trends, aes(x = year, y = n, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Fatal vs Non-Fatal Shootings by Year", 
+       x = "Year", 
+       y = "Number of Incidents", 
+       fill = "Fatal?") +
+  scale_fill_manual(values = c("grey", "red"))
+```
+
+
+```{r}
+# Hour
+data_clean$hour = hour(data_clean$DATETIME)
+
+# Summarize by hour
+hourly = data_clean %>% 
+  group_by(hour) %>% 
+  summarise(n_shootings = n())
+
+# Plot
+ggplot(hourly, aes(x = hour, y = n_shootings)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  labs(title = "NYPD Shootings by Hour of Day", 
+       x = "Hour (0-23)", 
+       y = "Number of Incidents")
+```
+## Data Modeling
+```{r}
+# Regression: Predict fatality bases on year, borough
+# Ensure STATISTICAL_MURDER_FLAG is binary before splitting
+data_clean$STATISTICAL_MURDER_FLAG = ifelse(data_clean$STATISTICAL_MURDER_FLAG == "true", 1, 0)
+
+# Ensure no missing values in the dependent variable
+data_clean = na.omit(data_clean)
+
+# Split the data
+set.seed(123)
+trainIndex = createDataPartition(data_clean$STATISTICAL_MURDER_FLAG, p = 0.8, list = FALSE)
+train_data = data_clean[trainIndex, ]
+
+# Check unique values to confirm binary encoding
+unique(train_data$STATISTICAL_MURDER_FLAG) 
+
+# Fit logistic regression model
+model = glm(STATISTICAL_MURDER_FLAG ~ year + I(year^2) + BORO + VIC_AGE_GROUP + 
+             PERP_AGE_GROUP + JURISDICTION_CODE, 
+             family = "binomial", data = train_data)
+
+# Display model summary
+summary(model)
+
+```
+
+```{r}
+# plot of victim by age
+coefficients = summary(model)$coefficients
+age_coeffs = coefficients[grepl("VIC_AGE_GROUP|PERP_AGE_GROUP", rownames(coefficients)), ]
+age_coeffs = as.data.frame(age_coeffs)
+age_coeffs$Variable = rownames(age_coeffs)
+ggplot(age_coeffs, aes(x = reorder(Variable, Estimate), y = Estimate)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_errorbar(aes(ymin = Estimate - 1.96 * `Std. Error`, ymax = Estimate + 1.96 * `Std. Error`), 
+                width = 0.3, color = "black") +
+  labs(title = "Effect of Victim and Perpetrator Age Groups on Probability of Murder",
+       x = "Age Group",
+       y = "Estimated Coefficient") +
+  theme_minimal() +
+  coord_flip() +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) + 
+  scale_y_continuous(limits = c(-1, 1))  # Adjust limit as needed
+```
+
+```{r}
+# Machine Learning: XGBoost
+# Prepare data: Convert categorical variables to factors
+train_data = data_clean[trainIndex, ]
+data_clean$VIC_SEX = as.factor(data_clean$VIC_SEX)
+data_clean$PERP_AGE_GROUP = as.factor(data_clean$PERP_AGE_GROUP)
+data_clean$PERP_SEX = as.factor(data_clean$PERP_SEX)
+data_clean$JURISDICTION_CODE = as.factor(data_clean$JURISDICTION_CODE)
+
+# Convert STATISTICAL_MURDER_FLAG to 0/1 (already verified)
+data_clean$STATISTICAL_MURDER_FLAG = as.numeric(data_clean$STATISTICAL_MURDER_FLAG)
+
+# Create train-test split
+set.seed(123)
+trainIndex = createDataPartition(data_clean$STATISTICAL_MURDER_FLAG, p = 0.8, list = FALSE)
+train_data = data_clean[trainIndex, ]
+test_data = data_clean[-trainIndex, ]
+
+# Combine data to ensure consistent dummy variables
+combined_data = rbind(train_data[, c("year", "BORO", "hour", "VIC_AGE_GROUP", "VIC_SEX", 
+                                      "PERP_AGE_GROUP", "JURISDICTION_CODE")], 
+                       test_data[, c("year", "BORO", "hour", "VIC_AGE_GROUP", "VIC_SEX", 
+                                     "PERP_AGE_GROUP", "JURISDICTION_CODE")])
+combined_matrix = model.matrix(~ . - 1, data = combined_data)
+
+# Split back into train and test matrices
+train_matrix = combined_matrix[1:nrow(train_data), ]
+test_matrix = combined_matrix[(nrow(train_data) + 1):nrow(combined_matrix), ]
+
+# Prepare XGBoost data
+dtrain = xgb.DMatrix(data = train_matrix, label = train_data$STATISTICAL_MURDER_FLAG)
+dtest = xgb.DMatrix(data = test_matrix, label = test_data$STATISTICAL_MURDER_FLAG)
+
+# Set class weights to handle imbalance
+scale_pos_weight = sum(train_data$STATISTICAL_MURDER_FLAG == 0) / sum(train_data$STATISTICAL_MURDER_FLAG == 1)
+print(paste("Scale pos weight:", scale_pos_weight))
+
+# Define parameters
+params <- list(
+  objective = "binary:logistic",
+  eval_metric = "logloss",
+  eta = 0.3,
+  max_depth = 6,
+  subsample = 0.8,
+  colsample_bytree = 0.8
+)
+
+# Train the model with early stopping
+xgb_model = xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, test = dtest),
+  scale_pos_weight = scale_pos_weight,
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# Predict on test set
+test_data$pred = predict(xgb_model, dtest)
+test_data$pred_class = ifelse(test_data$pred > 0.5, 1, 0)  # Default threshold
+
+# Confusion matrix
+confusionMatrix(as.factor(test_data$pred_class), as.factor(test_data$STATISTICAL_MURDER_FLAG), positive = "1")
+xgb_cv = xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  nfold = 5,
+  scale_pos_weight = scale_pos_weight,
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+```
+
+```{r}
+# Assuming test_data contains actual and predicted values
+test_data$pred_prob <- predict(xgb_model, dtest)
+test_data$pred_class <- ifelse(test_data$pred_prob > 0.5, 1, 0)
+
+# ROC Curve
+roc_obj <- roc(test_data$STATISTICAL_MURDER_FLAG, test_data$pred_prob)
+ggplot() +
+  geom_line(aes(x = roc_obj$specificities, y = roc_obj$sensitivities), color = 'blue') +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "ROC Curve for Murder Classification", x = "False Positive Rate", y = "True Positive Rate")
+
+# Precision-Recall Curve
+pr <- prediction(test_data$pred_prob, test_data$STATISTICAL_MURDER_FLAG)
+pr_curve <- performance(pr, "prec", "rec")
+pr_df <- data.frame(recall = unlist(pr_curve@x.values), precision = unlist(pr_curve@y.values))
+
+ggplot(pr_df, aes(x = recall, y = precision)) +
+  geom_line(color = "red") +
+  labs(title = "Precision-Recall Curve", x = "Recall", y = "Precision")
+
+# Confusion Matrix
+conf_matrix <- table(Predicted = test_data$pred_class, Actual = test_data$STATISTICAL_MURDER_FLAG)
+conf_matrix_melt <- melt(conf_matrix)
+
+ggplot(conf_matrix_melt, aes(x = Predicted, y = Actual, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = value), color = "white", size = 5) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "Confusion Matrix", x = "Predicted Label", y = "Actual Label") +
+  theme_minimal()
+```
+
+# **Evaluate / Interpret**
+### NYPD Shootings by Borough
+
+#### Brooklyn: exceeds 9,000 incidents, Bronx: around 7,000-8,000 incidents, Queens: around 4,000-5,000 incidents, Manhattan: around 3,000-4,000 incidents, Staten Island: below 2,000 incidents.
+
+#### Brooklyn and Bronx together account for the majority of shootings. Brooklyn and Bronx have larger populations, which might contribute to higher incident counts. Staten Island’s low count could indicate safer conditions or fewer reported incidents, possibly due to its smaller size
+
+#### Limitations: The chart shows total incidents over the dataset’s timeframe (2006-2022). It doesn’t account for population density or time trends.
+
+### Fatal vs Non-Fatal Shootings by Year
+
+#### 2006-2009: fatal shootings around 500-600 per year, 2010-2016: fatal shootings 200-300 per year, 2017-2020: fatial shootings 400-500, 2021-2022: fatal shooting around 400. 
+
+#### Fatal shootings consistently make up a smaller portion of total incidents, roughly 20-30% each year. The proportion of fatal shootings appears relatively stable over time, despite fluctuations in total incidents.
+
+#### Limitations: While the stacked bars show raw counts, the proportion of fatal shootings isn’t immediately clea
+
+### NYPD Shootings by Hour of Day
+
+#### 0-3 AM: 2000-2500 incidents, 4-7 AM: 500 incidents, 8 AM - noon: 1000-1500 incidents, noon-5 PM: 1500 incidents, 6PM-11PM: 2000-2500 incidents. 
+
+#### The majority of shootings occur during nighttime and early morning hours, with the lowest activity during the early morning (4-7 AM), likely corresponding to lower population activity. The two peaks (0-3 AM and 8-11 PM) suggest times of higher social activity or vulnerability, possibly linked to nightlife, late-night gatherings, or reduced visibility/policing.
+
+#### Limitations: The chart shows total incidents but doesn’t differentiate by factors like borough, fatality, or day of the week, which could provide deeper insights
+
+### Logistic Regression
+#### Age Effect: Older victims (65+) are 3.18 (0.9408, p < 0.001) times more likely to die, possibly due to physical vulnerability or delayed medical response. Age 18-24: Increases the log-odds by 0.2796 (p < 0.001). Age 25-44: Increases the log-odds by 0.5243 (p < 0.001). Age 45-64: Stronger effect (0.6792, p < 0.001).Time Trend: The U-shaped trend (lowest ~2014-2015) suggests external factors (e.g., policing, social unrest) influenced fatality rates post-2015. There did not appear to be any significant effect of death based on borough. Perpetrators aged 18-24 and 25-44 are more likely to be involved in shootings that result in murder (p < 0.05).Perpetrators aged 45-64 have the strongest effect (0.7447, p < 0.001).Null deviance vs. Residual deviance: The model explains some variation in the data, but there is still room for improvement.AIC: Lower AIC values indicate a better model.  
+
+
+
+# **Summary**
+
+#### The evaluation of the NYPD Shooting Data visualizations reveals distinct patterns across the  charts. For NYPD Shootings by Borough, Brooklyn exceeds 9,000 incidents, followed by Bronx with 7,000-8,000, Queens with 4,000-5,000, Manhattan with 3,000-4,000, and Staten Island below 2,000. Brooklyn and Bronx together account for the majority of shootings, likely influenced by their larger populations, while Staten Island’s low count may indicate safer conditions or fewer reported incidents, possibly due to its smaller size. However, the chart, covering total incidents from 2006 to 2022, does not account for population density or time trends, limiting its depth. 
+
+#### For Fatal vs Non-Fatal Shootings by Year, fatal shootings range from 500-600 per year in 2006-2009, drop to 200-300 in 2010-2016, rise to 400-500 in 2017-2020, and stabilize around 400 in 2021-2022, consistently making up 20-30% of total incidents with a stable proportion despite fluctuations. The limitation here is that raw counts obscure exact proportions, and the inclusion of 2005 data may be incomplete. Interestingly enough, the borough didn't matter when evaluating for fatal vs non-fatal. Also, older age of the vitim and perpetrater were also associated with an increased odds of fatality. 
+
+#### Lastly, NYPD Shootings by Hour of Day shows peaks of 2,000-2,500 incidents at 0-3 AM and 6-11 PM, a dip to around 500 incidents at 4-7 AM, and 1,000-1,500 incidents midday, with nighttime peaks suggesting higher social activity or vulnerability and the low morning activity aligning with reduced population presence. The chart’s limitation is its lack of differentiation by borough, fatality, or day of week, which could provide deeper insights.
+
+#### Murder classification likelihood has decreased over time, but there may be a non-linear trend. Older victims and perpetrators significantly increase classification probability. Missing perpetrator age significantly decreases the probability of statistical murder classification.Borough is not a strong predictor.
+
+### Of note, the machine learning prediction did not significantly improve the model over linear regression models. The model correctly classifies ~62% of the cases.The model captures ~61% of the actual murders. The model captures ~62% of non-murder cases. Only 27.74% of cases predicted as murder are actually murders.87.15% of cases predicted as non-murder are correct. McNemar’s Test (p < 2e-16) Suggests a significant difference between how the model predicts Class 0 vs. Class 1. Kappa = 0.1607 Indicates the model is only slightly better than random guessing.The model struggles with correctly identifying murder cases (Class 1), which is expected given the class imbalance. 
+
+### Potential biases include population bias where higher counts in Brooklyn and Bronx may reflect population size rather than crime rate per capita, reporting bias where lower counts in Staten Island could result from underreporting or fewer police resources, and geographic bias where urban density differences are not normalized in the borough analysis. For fatal vs. non-fatal shootings, there may be data collection bias from variations in medical response or reporting standards affecting fatality classification, temporal bias from aggregated data masking yearly shifts like the 2020 COVID impact, and definition bias where the "fatal" definition may vary and skew trends. In the hourly analysis, activity bias may overrepresent nightlife areas at 0-3 AM and 8-11 PM while underrepresenting daytime crime, reporting bias might lower 4-7 AM counts due to fewer witnesses or patrols, and temporal aggregation bias averages over 2006-2022, ignoring seasonal or yearly variations like post-2020 changes. Overall, the data aggregation across long periods, absence of normalization, and lack of socioeconomic or policing context introduce potential confounding biases that could be mitigated with per-capita adjustments, faceting by additional factors, and validation with external data.
+
+ 
+
+
+
+
+
+
+
+
+
+
