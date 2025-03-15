@@ -1,0 +1,492 @@
+---
+title: 'Data Science as a Field: COVID 19'
+author: 
+date: "2025-03-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r} 
+#Required libraries
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(cluster)
+library(factoextra)
+library(randomForest)
+```
+
+```{r}
+# Import the data
+url_in = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names = c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv")
+urls = str_c(url_in, file_names)
+global_conf = read.csv(urls[3])
+US_conf = read.csv(urls[1])
+global_deaths = read.csv(urls[4])
+US_deaths = read.csv(urls[2])
+uid_url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+Pop = read.csv(uid_url)
+```
+
+## Data Preparation
+
+### Reshaping, Conversion, and Renaming of the Global Dataset
+
+```{r}
+# Remove Lat and Long, change the dates to single column with values as cases
+global_conf = global_conf %>%
+ select(-Lat, -Long) %>%
+ pivot_longer(
+ cols = starts_with("X"),
+ names_to = "Date",
+ values_to = "Cases"
+ ) %>%
+ mutate(
+ Date = sub("^X", "", Date),
+ Date = as.Date(Date, format = "%m.%d.%y")
+ )
+```
+
+```{r}
+# Remove Lat and Long, change the dates to single column with values as cases
+global_deaths = global_deaths %>%
+  select(-Lat, -Long) %>%
+  pivot_longer(
+    cols = starts_with("X"),
+    names_to = "Date",
+    values_to = "Cases"  
+  ) %>%
+  mutate(
+    Date = sub("^X", "", Date),
+    Date = as.Date(Date, format = "%m.%d.%y")
+  )
+```
+
+```{r}
+# Join the global deaths and confirmed cases
+global_combined <- full_join(
+  global_conf,
+  global_deaths,
+  by = c("Province.State", "Country.Region", "Date"),
+  suffix = c("_confirmed", "_deaths")
+)
+```
+
+```{r}
+# Remove any cases that are 0
+global_combined = global_combined %>% filter(Cases_confirmed > 0)
+```
+
+### Reshaping, Conversion, and Renaming of the US Dataset
+```{r}
+# Change columns to combined, remove X in front of date, change dates to one column with cases for the values
+US_conf = US_conf %>%
+  pivot_longer(
+    cols = -(UID:Combined_Key),  
+    names_to = "date",
+    values_to = "case"
+  ) %>%
+  mutate(
+    date = sub("^X", "", date),  
+    date = mdy(date)             
+  ) %>%
+  select(Admin2, Province_State, Country_Region, Combined_Key, date, case)
+
+```
+
+```{r}
+# Change columns to combined, remove X in front of date, change dates to one column with cases for the values
+US_deaths = US_deaths %>%
+  pivot_longer(
+    cols = -c(UID:Combined_Key, Population),  
+    names_to = "date",
+    values_to = "case"
+  ) %>%
+  mutate(
+    date = sub("^X", "", date),
+    date = as.Date(date, format = "%m.%d.%y")
+  ) %>%
+  select(Admin2, Province_State, Country_Region, Combined_Key, Population, date, case)
+```
+
+```{r}
+# Combined US deaths and cases
+US_combined = full_join(
+  US_conf,
+  US_deaths,
+  by = c("Admin2", "Province_State", "Country_Region", "Combined_Key", "date"),
+  suffix = c("_confirmed", "_deaths")
+) %>%
+  rename(
+    Confirmed = case_confirmed,
+    Deaths = case_deaths
+  ) %>%
+  select(Admin2, Province_State, Country_Region, Combined_Key, date, Population, Confirmed, Deaths)
+
+```
+
+```{r}
+# Create the Combined_Key column and rename the columns
+global_combined = global_combined %>%
+  unite(Combined_Key, Province.State, Country.Region, sep = "_", remove = FALSE) %>%
+  rename(Province_State = Province.State, Country_Region = Country.Region)
+```
+
+```{r}
+# Renaming columns to match for the population join
+global_combined = global_combined %>%
+  rename(Cases = Cases_confirmed, Deaths = Cases_deaths)
+
+US_combined = US_combined %>%
+  rename(Cases = Confirmed, Date= date)
+```
+
+```{r}
+# Add population to global variable
+global_combined = global_combined %>%
+  left_join(Pop %>% select(Province_State, Country_Region, Population), 
+            by = c("Province_State", "Country_Region")) %>%
+  select(Province_State, Country_Region, Date, Cases, Deaths, Population, Combined_Key)
+```
+
+## Data Analysis, Visualization, and Modeling
+
+```{r}
+# US by state
+US_by_state = US_combined %>%
+  group_by(Province_State, Date) %>%
+  summarize(
+    Cases = sum(Cases, na.rm = TRUE),
+    Deaths = sum(Deaths, na.rm = TRUE),
+    Population = sum(Population, na.rm = TRUE),  #
+    .groups = "drop"  
+  )
+US_by_state = US_by_state %>%
+  mutate(deaths_per_mill = Deaths * 1e6 / Population)
+
+summary(US_by_state)
+
+```
+
+```{r}
+# Creating US totals
+US_totals = US_by_state %>%
+  group_by(Date) %>%  
+  summarize(
+    Cases = sum(Cases, na.rm = TRUE),
+    Deaths = sum(Deaths, na.rm = TRUE),
+    Population = sum(Population, na.rm = TRUE),
+    .groups = "drop"  
+  ) %>%
+  mutate(deaths_per_mill = Deaths * 1e6 / Population) %>%  
+  select(Date, Cases, Deaths, Population, deaths_per_mill)  
+summary(US_totals) 
+```
+```{r}
+# Plot of US total cases and deaths
+US_totals %>%
+  filter(Cases > 0) %>%  
+  ggplot(aes(x = Date)) +  
+  geom_line(aes(y = Cases, color = "Cases")) +
+  geom_point(aes(y = Cases, color = "Cases")) +
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +  
+  scale_color_manual(values = c("Cases" = "blue", "Deaths" = "red")) +  
+  theme_minimal() +  
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, hjust = 1)
+  ) +
+  labs(
+    title = "COVID-19 in the US",
+    y = "Total Cases & Deaths",
+    x = "Date",
+    color = "Legend"
+  )
+```
+```{r}
+# Texas cases and deaths
+US_by_state %>%
+  filter(Province_State == "Texas") %>%  
+  filter(Cases > 0) %>%  
+  ggplot(aes(x = Date)) +  
+  geom_line(aes(y = Cases, color = "Cases")) +
+  geom_point(aes(y = Cases, color = "Cases")) +
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +  
+  scale_color_manual(values = c("Cases" = "blue", "Deaths" = "red")) +  
+  theme_minimal() +  
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, hjust = 1)
+  ) +
+  labs(
+    title = "COVID-19 in Texas",  
+    y = "Total Cases & Deaths",
+    x = "Date",
+    color = "Legend"
+  )
+```
+
+```{r}
+# max by date
+cat("Max Date:", format(max(US_totals$Date), "%Y-%m-%d"), "\n")
+
+# max deaths
+cat("Max Deaths:", (max(US_totals$Deaths)), "\n")
+
+```
+```{r}
+# evaluate if the deaths are plateauing
+
+US_by_state <- US_by_state %>%
+  arrange(Province_State, Date) %>% 
+  mutate(
+    new_cases = Cases - lag(Cases, default = 0),
+    new_deaths = Deaths - lag(Deaths, default = 0)
+  )
+
+US_totals <- US_totals %>%
+  mutate(
+    new_cases = Cases - lag(Cases, default = 0),
+    new_deaths = Deaths - lag(Deaths, default = 0)
+  )
+
+tail(US_totals %>% select(new_cases, new_deaths, everything()))
+```
+```{r}
+# Plot the new cases and new deaths
+
+US_totals %>%
+  ggplot(aes(x = Date)) +  
+  geom_line(aes(y = new_cases, color = "New Cases")) +
+  geom_point(aes(y = new_cases, color = "New Cases")) +
+  geom_line(aes(y = new_deaths, color = "New Deaths")) +
+  geom_point(aes(y = new_deaths, color = "New Deaths")) +
+  scale_y_log10() +  
+  scale_color_manual(values = c("New Cases" = "blue", "New Deaths" = "red")) +  
+  theme_minimal() + 
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, hjust = 1)
+  ) +
+  labs(
+    title = "COVID-19 in the US",
+    y = "Total Cases & Deaths",
+    x = "Date",
+    color = "Legend"
+  )
+```
+
+```{r}
+# Texas graph of new deaths and cases
+
+state = "Texas"  
+
+US_by_state %>%
+  filter(Province_State == state) %>%  
+  filter(new_cases > 0) %>%  
+  ggplot(aes(x = Date)) +  
+  geom_line(aes(y = new_cases, color = "New Cases")) +
+  geom_point(aes(y = new_cases, color = "New Cases")) +
+  geom_line(aes(y = new_deaths, color = "New Deaths")) +
+  geom_point(aes(y = new_deaths, color = "New Deaths")) +
+  scale_y_log10() +  
+  scale_color_manual(values = c("New Cases" = "blue", "New Deaths" = "red")) +  
+  theme_minimal() +  
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, hjust = 1)
+  ) +
+  labs(
+    title = "COVID-19 in Texas",  
+    y = "New Cases & Deaths",
+    x = "Date",
+    color = "Legend"
+  )
+```
+
+```{r}
+# Summarize state level totals
+US_state_totals = US_by_state %>%
+  group_by(Province_State) %>%
+  summarize(
+    deaths = max(Deaths, na.rm = TRUE),  
+    cases = max(Cases, na.rm = TRUE),
+    population = max(Population, na.rm = TRUE),
+    cases_per_thou = 1000 * cases / population,
+    deaths_per_thou = 1000 * deaths / population,
+    .groups = "drop"  
+  ) %>%
+  filter(cases > 0, population > 0)
+
+# Get the 10 states with the lowest deaths per thousand
+US_state_totals %>%
+  slice_min(deaths_per_thou, n = 10) %>%  
+  select(Province_State, deaths_per_thou, cases_per_thou, cases, deaths, population)
+
+```
+
+```{r}
+# Top 10 worse states
+US_state_totals %>%
+  slice_max(deaths_per_thou, n = 10) %>%  
+  select(Province_State, deaths_per_thou, cases_per_thou, cases, deaths, population)
+
+```
+
+```{r}
+# Linear model predicting deaths per 1000 based on cases per 1000
+mod = lm(deaths_per_thou ~ cases_per_thou, data = US_state_totals)  
+summary(mod)  
+```
+
+```{r}
+# Deaths per 1000 by population
+mod2 = lm(deaths_per_thou ~ cases_per_thou + population, data = US_state_totals)
+summary(mod2)
+```
+
+```{r}
+# Analysis of variance deaths vs cases per thousand and population
+anova(mod, mod2)
+```
+
+```{r}
+# State with the minimum cases per 1000
+US_state_totals %>%
+  slice_min(cases_per_thou, n = 1)
+```
+
+```{r}
+# State with the maximum cases per 1000
+US_state_totals %>%
+  slice_max(cases_per_thou, n = 1)  
+
+```
+```{r}
+# Create a sequence from 1 to 151
+x_grid <- seq(1, 151)
+
+# Create a new tibble for cases_per_thou
+new_df = tibble(cases_per_thou = x_grid)
+
+# Add predicted values from the regression model
+US_state_totals = US_state_totals %>%
+  mutate(pred = predict(mod, newdata = US_state_totals))  
+
+head(US_state_totals)
+```
+
+```{r}
+library(dplyr)
+
+US_total_w_pred = US_state_totals %>%
+  mutate(
+    pred = predict(mod, newdata = US_state_totals),
+    pred2 = predict(mod2, newdata = US_state_totals),
+    std_ratio = ((deaths_per_thou / cases_per_thou) - 
+                (mean(deaths_per_thou, na.rm = TRUE) / mean(cases_per_thou, na.rm = TRUE))) / 
+                sd(deaths_per_thou / cases_per_thou, na.rm = TRUE)  
+  )
+
+US_total_w_pred
+```
+```{r}
+# US total with the 2 prediction models
+US_total_w_pred %>%
+  ggplot(aes(x = cases_per_thou)) +
+  geom_point(aes(y = deaths_per_thou), color = "blue", alpha = 0.6, size = 3) +  
+  geom_point(aes(y = pred), color = "red", alpha = 0.6, size = 3) +  
+  geom_point(aes(y = pred2), color = "green", alpha = 0.6, size = 3) +  
+  labs(
+    title = "COVID-19 Deaths per Thousand vs Cases per Thousand",
+    x = "Cases per Thousand",
+    y = "Deaths per Thousand",
+    caption = "Blue = Actual, Red = Model 1 Prediction, Green = Model 2 Prediction"
+  ) +
+  theme_minimal()
+```
+```{r}
+gc()
+```
+
+## **Feature Importance Analysis Using Random Forest**
+
+### **Data Preprocessing**
+```{r preprocessing}
+# Compute deaths per thousand
+covid_data <- global_combined %>%
+  select(Country_Region, Cases, Deaths, Population) %>%
+  drop_na() %>%
+  mutate(deaths_per_thou = (Deaths / Population) * 1000) %>%
+  select(-Deaths)  # Remove Deaths since we use deaths_per_thou instead
+
+# Convert columns to numeric (if needed)
+covid_data[, -1] <- lapply(covid_data[, -1], as.numeric)
+
+# Ensure dataset has enough numeric features
+if (ncol(covid_data) > 2) {
+  # Normalize data
+  covid_scaled <- covid_data %>%
+    select(-Country_Region) %>%
+    scale()
+} else {
+  stop("Not enough numeric columns for feature importance analysis.")
+}
+```
+
+### **Applying Random Forest for Feature Importance**
+```{r random-forest}
+# Define the response variable (deaths per thousand)
+response <- covid_data$deaths_per_thou
+
+# Define the predictor variables
+predictors <- covid_data %>% select(-deaths_per_thou)
+
+# Train Random Forest model
+set.seed(123)
+rf_model <- randomForest(x = predictors, y = response, ntree = 500, importance = TRUE)
+
+# Extract feature importance
+feature_importance <- importance(rf_model)
+feature_importance_df <- as.data.frame(feature_importance)
+feature_importance_df$Feature <- rownames(feature_importance_df)
+```
+
+### **Visualizing Feature Importance**
+```{r feature-importance-plot}
+# Plot feature importance
+ggplot(feature_importance_df, aes(x = reorder(Feature, IncNodePurity), y = IncNodePurity)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance in Predicting COVID-19 Deaths", x = "Feature", y = "Importance (IncNodePurity)") +
+  theme_minimal()
+```
+
+### **Feature Importance Interpretation**
+```{r feature-interpretation}
+# Display top important features
+feature_importance_df %>%
+  arrange(desc(IncNodePurity)) %>%
+  head(10)
+```
+
+## Conclusions, Biases
+
+### COVID-19 was considered a serious global threat, and understanding its spread is crucial for epotential future infectious issues. This analysis examines how population size and case rates per thousand influence deaths per thousand across U.S. states. Using linear regression models, I generated state-level death rate predictions. However, the models could be significantly improved with additional predictors such as lockdown, masking, testing rates, vaccinations, and temperature.
+
+### A key source of bias in the data stems from inconsistencies in state-level reporting of cases and deaths, influenced by infrastructure limitations and reporting delays. Testing rates also introduce bias, as underreporting of asymptomatic or untested cases may lead to an underestimation of true infection rates. Additionally, my focus on U.S. data introduces personal bias, as a broader global dataset might yield different insights. The choice of an alpha level of 0.05 could also impact statistical conclusions.
+
+### Despite these limitations, the data indicates a decline in COVID-19 cases, reinforcing the importance of continued safety measures and vaccine distribution to mitigate the pandemic’s impact.
+
