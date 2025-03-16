@@ -1,15 +1,24 @@
 ---
 title: 'Data Science as a Field: COVID 19'
-author: "null"
+author: 'null'
 date: "2025-03-02"
 output:
-  word_document: default
+  pdf_document: default
   html_document: default
+  word_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+# **Introduction**
+
+### The COVID-19 pandemic has had a profound impact worldwide, with varying infection and mortality rates across different regions. Understanding the relationship between cases and deaths can provide insights into mortality risk and healthcare system effectiveness. This study examines COVID-19 trends in both U.S. states and globally.
+
+# **Objective**
+
+## We hypothesize that an increase in cases will be associated with an increase in deaths, given the expected mortality risk associated with the virus. By using linear regression models, we aim to assess the strength and significance of this relationship and determine whether population size influences mortality rates. This study will help evaluate the effectiveness of basic statistical models in explaining COVID-19 fatality trends and provide insights into potential factors affecting mortality rates.  
 
 ```{r}
 # Install required libraries
@@ -39,7 +48,7 @@ uid_url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse
 Pop = read.csv(uid_url)
 ```
 
-## Data Preparation
+# **Data Preparation**
 
 ### Reshaping, Conversion, and Renaming of the Global Dataset
 
@@ -160,7 +169,7 @@ global_combined = global_combined %>%
   select(Province_State, Country_Region, Date, Cases, Deaths, Population, Combined_Key)
 ```
 
-## Data Analysis, Visualization, and Modeling
+# **Data Analysis, Visualization, and Modeling**
 
 ```{r}
 # US by state
@@ -359,13 +368,13 @@ summary(mod)
 mod2 = lm(deaths_per_thou ~ cases_per_thou + population, data = US_state_totals)
 summary(mod2)
 ```
-#### #### A simple linear regression model predicting deaths per thousand based on cases per thousand in the U.S. dataset showed a statistically significant relationship (p < 0.001), with an R-squared value of 0.31, indicating that 30.6% of the variance in deaths per thousand can be explained by cases per thousand. The regression coefficient suggests that for every additional case per thousand, the death rate increases by 0.0113 per thousand. Adding population as an additional predictor in the second model slightly improved the R-squared value to 0.33, but the population variable was not statistically significant (p = 0.137). 
+#### A simple linear regression model predicting deaths per thousand based on cases per thousand in the U.S. dataset showed a statistically significant relationship (p < 0.001), with an R-squared value of 0.31, indicating that 30.6% of the variance in deaths per thousand can be explained by cases per thousand. The regression coefficient suggests that for every additional case per thousand, the death rate increases by 0.0113 per thousand. Adding population as an additional predictor in the second model slightly improved the R-squared value to 0.33, but the population variable was not statistically significant (p = 0.137). 
 
 ```{r}
 # Analysis of variance deaths vs cases per thousand and population for the US dataset
 anova(mod, mod2)
 ```
-#### #### An ANOVA comparison between the two models revealed no significant improvement (p = 0.1375), suggesting that population does not substantially contribute to explaining deaths per thousand.
+#### An ANOVA comparison between the two models revealed no significant improvement (p = 0.1375), suggesting that population does not substantially contribute to explaining deaths per thousand.
 
 ```{r}
 # Add deaths and cases per thousand for the global dataset
@@ -501,7 +510,7 @@ prophet_plot_components(model, forecast)
 ```
 #### First Image (Seasonality Components). Second Image (Actual vs Predicted Cases): Black Dots: Actual COVID-19 daily cases.Blue Line: Forecasted values with confidence intervals. ds = date stamp. y = responsive variable (daily covid cases).
 
-## Conclusions, Biases
+# **Conclusions, Biases**
 
 ### COVID-19 was considered a serious global threat, and understanding its spread is crucial for epotential future infectious issues. This analysis examines how population size and case rates per thousand influence deaths per thousand across U.S. states. Using linear regression models, I generated state-level death rate predictions. However, the models could be significantly improved with additional predictors such as lockdown, masking, testing rates, vaccinations, and temperature.
 
@@ -509,11 +518,11 @@ prophet_plot_components(model, forecast)
 
 ### The COVID-19 trend in the U.S. shows a sharp initial rise in both cases and deaths in early 2020, reflecting the rapid spread of the virus and its severe impact. While the cumulative number of cases is significantly higher than deaths, both follow a similar pattern over time. The growth rate slowed after 2021, with cases and deaths stabilizing by late 2022. The use of a logarithmic scale emphasizes the early surges but also highlights how the rate of increase became more gradual after the initial waves. Similarly, the COVID-19 trend in Texas follows a trajectory comparable to the national trend, with an early surge in cases and deaths. However, Texas' total case count is much lower than the national total, which aligns with its smaller population. The proportion of deaths to total cases appears consistent with the national average, suggesting a similar mortality rate. By late 2022, both cases and deaths plateaued, mirroring the overall U.S. trend.
 
-### The scatter plot shows a positive correlation between COVID-19 deaths per thousand and cases per thousand, indicating that as cases increase, deaths also tend to rise. The data points generally follow a clear trend, though some deviations and outliers are present, particularly at lower death rates where actual values diverge more significantly. This suggests that while the relationship between cases and deaths is strong.  
+### The scatter plot shows a positive correlation between COVID-19 deaths per thousand and cases per thousand, indicating that as cases increase, deaths also tend to rise. The data points generally follow a clear trend, though some deviations and outliers are present, particularly at lower death rates where actual values diverge more significantly. This suggests that the relationship between cases and deaths is strong.  
 
-### Timeseries forecasting for the US states: I created a timeseries forecast as an aggregate of all the states. This hows a rise in cases in early 2020, peaks in 2021–2022, and then stabilizes. Cases increase early in the week (Monday–Wednesday) and drop on weekends (Saturday). eaks appear around April and December, which might align with holiday surges or seasonal COVID-19 waves. Actual vs Predicted Cases-> This model captures major COVID-19 waves (2021 & 2022 spikes). 
+### Timeseries forecasting for the US states: This demonstrates a rise in cases in early 2020, peaks in 2021–2022, and then stabilizes. Cases increase early in the week (Monday–Wednesday) and drop on weekends (Saturday). Peaks appear around April and December, which might align with holiday surges or seasonal COVID-19 waves. Actual vs Predicted Cases-> This model captures major COVID-19 waves (2021 & 2022 spikes). 
 
-### A key source of bias in the data stems from inconsistencies in state-level reporting of cases and deaths, influenced by infrastructure limitations and reporting delays. Testing rates also introduce bias, as underreporting of asymptomatic or untested cases may lead to an underestimation of true infection rates. Additionally, my focus on U.S. data introduces personal bias, as a broader global dataset might yield different insights. The choice of an alpha level of 0.05 could also impact statistical conclusions.
+### A key source of bias in the data stems from inconsistencies in state-level reporting of cases and deaths, influenced by infrastructure limitations and reporting delays. Testing rates also introduce bias, as there are likely underreported. There is no socioeconimic status such as access or quality of healthcare, testing rates, and reporting discrepancies (such as reporting a COVID death when it was assocaited but not causal). The choice of an alpha level of 0.05 could also impact statistical conclusions.
 
-### Despite these limitations, the data indicates a decline in COVID-19 cases, reinforcing the importance of continued safety measures and vaccine distribution to mitigate the pandemic’s impact.
+
 
