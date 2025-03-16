@@ -1,15 +1,20 @@
 ---
 title: 'Data Science as a Field: COVID 19'
-author: 
+author: "null"
 date: "2025-03-02"
-output: html_document
+output:
+  word_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r} 
+```{r}
+# Install required libraries
+# You can using this just copy past into your R studio if you don't have these already installed: install.packages(c("tidyverse", "dplyr", "lubridate", "ggplot2", "prophet"))
+
 #Required libraries
 library(tidyverse)
 library(dplyr)
@@ -344,21 +349,48 @@ US_state_totals %>%
 ```
 
 ```{r}
-# Linear model predicting deaths per 1000 based on cases per 1000
+# Linear model predicting deaths per 1000 based on cases per 1000 for the US dataset
 mod = lm(deaths_per_thou ~ cases_per_thou, data = US_state_totals)  
 summary(mod)  
 ```
 
 ```{r}
-# Deaths per 1000 by population
+# Deaths per 1000 by population for the US dataset
 mod2 = lm(deaths_per_thou ~ cases_per_thou + population, data = US_state_totals)
 summary(mod2)
 ```
+#### #### A simple linear regression model predicting deaths per thousand based on cases per thousand in the U.S. dataset showed a statistically significant relationship (p < 0.001), with an R-squared value of 0.31, indicating that 30.6% of the variance in deaths per thousand can be explained by cases per thousand. The regression coefficient suggests that for every additional case per thousand, the death rate increases by 0.0113 per thousand. Adding population as an additional predictor in the second model slightly improved the R-squared value to 0.33, but the population variable was not statistically significant (p = 0.137). 
 
 ```{r}
-# Analysis of variance deaths vs cases per thousand and population
+# Analysis of variance deaths vs cases per thousand and population for the US dataset
 anova(mod, mod2)
 ```
+#### #### An ANOVA comparison between the two models revealed no significant improvement (p = 0.1375), suggesting that population does not substantially contribute to explaining deaths per thousand.
+
+```{r}
+# Add deaths and cases per thousand for the global dataset
+global_combined = global_combined %>%
+  mutate(
+    deaths_per_thou = (Deaths / Population) * 1000,
+    cases_per_thou = (Cases / Population) * 1000
+  )
+```
+
+```{r}
+# Linear model for deaths and cases per 1000 for the global dataset
+mod_global = lm(deaths_per_thou ~ cases_per_thou, data = global_combined)
+summary(mod_global)
+mod2_global = lm(deaths_per_thou ~ cases_per_thou + Population, data = global_combined)
+summary(mod2_global)
+```
+#### In the global dataset, the relationship between deaths per thousand and cases per thousand is much stronger, with an R-squared value of 0.33. The p-value for cases per thousand is extremely low (p < 2.2e-16), confirming a strong and highly significant association. The estimated coefficient indicates that each additional case per thousand results in a 0.0043 increase in deaths per thousand. When population was added as a predictor, the model slightly improved, with R-squared increasing to 0.332. Unlike the U.S. dataset, population was statistically significant (p < 2.2e-16), indicating that it does contribute to explaining deaths per thousand globally.
+
+
+```{r}
+# Analysis of variance deaths vs cases per thousand and population for the global dataset
+anova(mod_global, mod2_global)
+```
+#### An ANOVA test confirmed that adding population resulted in a statistically significant improvement (p < 2.2e-16).
 
 ```{r}
 # State with the minimum cases per 1000
@@ -374,7 +406,7 @@ US_state_totals %>%
 ```
 ```{r}
 # Create a sequence from 1 to 151
-x_grid <- seq(1, 151)
+x_grid = seq(1, 151)
 
 # Create a new tibble for cases_per_thou
 new_df = tibble(cases_per_thou = x_grid)
@@ -416,7 +448,7 @@ US_total_w_pred %>%
   theme_minimal()
 ```
 ```{r}
-# Clear memory
+# Clear memory, sometimes needed for older operating systems
 gc()
 ```
 ```{r}
@@ -472,6 +504,12 @@ prophet_plot_components(model, forecast)
 ## Conclusions, Biases
 
 ### COVID-19 was considered a serious global threat, and understanding its spread is crucial for epotential future infectious issues. This analysis examines how population size and case rates per thousand influence deaths per thousand across U.S. states. Using linear regression models, I generated state-level death rate predictions. However, the models could be significantly improved with additional predictors such as lockdown, masking, testing rates, vaccinations, and temperature.
+
+### In the U.S. dataset, the latest recorded date is March 9, 2023, with a maximum total deaths of 1,123,836. Among the 10 worst-affected states, Arizona has the highest death rate per 1,000 population (4.55 deaths per 1,000), followed closely by Oklahoma (4.54) and Mississippi (4.49). The list also includes West Virginia, New Mexico, Arkansas, Alabama, Tennessee, Michigan, and Kentucky, all exhibiting death rates above 4 deaths per 1,000 people. This data highlights regional disparities in COVID-19 mortality, potentially influenced by healthcare infrastructure, vaccination rates, underlying health conditions, and public health policies. States with higher death rates may have faced greater challenges in pandemic response and higher vulnerability among their populations. 
+
+### The COVID-19 trend in the U.S. shows a sharp initial rise in both cases and deaths in early 2020, reflecting the rapid spread of the virus and its severe impact. While the cumulative number of cases is significantly higher than deaths, both follow a similar pattern over time. The growth rate slowed after 2021, with cases and deaths stabilizing by late 2022. The use of a logarithmic scale emphasizes the early surges but also highlights how the rate of increase became more gradual after the initial waves. Similarly, the COVID-19 trend in Texas follows a trajectory comparable to the national trend, with an early surge in cases and deaths. However, Texas' total case count is much lower than the national total, which aligns with its smaller population. The proportion of deaths to total cases appears consistent with the national average, suggesting a similar mortality rate. By late 2022, both cases and deaths plateaued, mirroring the overall U.S. trend.
+
+### The scatter plot shows a positive correlation between COVID-19 deaths per thousand and cases per thousand, indicating that as cases increase, deaths also tend to rise. The data points generally follow a clear trend, though some deviations and outliers are present, particularly at lower death rates where actual values diverge more significantly. This suggests that while the relationship between cases and deaths is strong.  
 
 ### Timeseries forecasting for the US states: I created a timeseries forecast as an aggregate of all the states. This hows a rise in cases in early 2020, peaks in 2021–2022, and then stabilizes. Cases increase early in the week (Monday–Wednesday) and drop on weekends (Saturday). eaks appear around April and December, which might align with holiday surges or seasonal COVID-19 waves. Actual vs Predicted Cases-> This model captures major COVID-19 waves (2021 & 2022 spikes). 
 
