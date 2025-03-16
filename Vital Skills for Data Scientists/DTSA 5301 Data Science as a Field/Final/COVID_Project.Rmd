@@ -15,9 +15,7 @@ library(tidyverse)
 library(dplyr)
 library(lubridate)
 library(ggplot2)
-library(cluster)
-library(factoextra)
-library(randomForest)
+library(prophet)
 ```
 
 ```{r}
@@ -418,73 +416,64 @@ US_total_w_pred %>%
   theme_minimal()
 ```
 ```{r}
+# Clear memory
 gc()
 ```
+```{r}
+# Timeseries Forcasting
 
-## **Feature Importance Analysis Using Random Forest**
 
-### **Data Preprocessing**
-```{r preprocessing}
-# Compute deaths per thousand
-covid_data <- global_combined %>%
-  select(Country_Region, Cases, Deaths, Population) %>%
-  drop_na() %>%
-  mutate(deaths_per_thou = (Deaths / Population) * 1000) %>%
-  select(-Deaths)  # Remove Deaths since we use deaths_per_thou instead
+# Load and prepare data
+US_combined = US_combined %>%
+    mutate(Date = as.Date(Date))
 
-# Convert columns to numeric (if needed)
-covid_data[, -1] <- lapply(covid_data[, -1], as.numeric)
+# Aggregate cases for all states (sum across states for each date)
+us_aggregated = US_combined %>%
+    group_by(Date) %>%
+    summarise(y = sum(Cases, na.rm = TRUE)) %>%
+    ungroup()
 
-# Ensure dataset has enough numeric features
-if (ncol(covid_data) > 2) {
-  # Normalize data
-  covid_scaled <- covid_data %>%
-    select(-Country_Region) %>%
-    scale()
-} else {
-  stop("Not enough numeric columns for feature importance analysis.")
-}
+# Rename columns for Prophet
+colnames(us_aggregated) = c("ds", "y")
+
+# Convert cumulative cases to daily new cases
+us_aggregated = us_aggregated %>%
+    arrange(ds) %>%
+    mutate(y = y - lag(y, default = first(y))) %>%  
+    mutate(y = ifelse(y < 0, 0, y))  
+
+# Apply log transformation
+us_aggregated = us_aggregated %>%
+    mutate(y = log1p(y))  
+
+# Train Prophet model
+model = prophet(us_aggregated, 
+                 weekly.seasonality = TRUE, 
+                 yearly.seasonality = TRUE)
+
+# Generate future predictions
+future_dates = make_future_dataframe(model, periods = 30)
+forecast = predict(model, future_dates)
+
+# Convert back from log scale
+forecast = forecast %>%
+    mutate(yhat = expm1(yhat),
+           yhat_lower = expm1(yhat_lower),
+           yhat_upper = expm1(yhat_upper))
+
+# Plot the forecast
+plot(model, forecast)
+
+# Plot seasonality components (trend, weekly, yearly)
+prophet_plot_components(model, forecast)
 ```
-
-### **Applying Random Forest for Feature Importance**
-```{r random-forest}
-# Define the response variable (deaths per thousand)
-response <- covid_data$deaths_per_thou
-
-# Define the predictor variables
-predictors <- covid_data %>% select(-deaths_per_thou)
-
-# Train Random Forest model
-set.seed(123)
-rf_model <- randomForest(x = predictors, y = response, ntree = 500, importance = TRUE)
-
-# Extract feature importance
-feature_importance <- importance(rf_model)
-feature_importance_df <- as.data.frame(feature_importance)
-feature_importance_df$Feature <- rownames(feature_importance_df)
-```
-
-### **Visualizing Feature Importance**
-```{r feature-importance-plot}
-# Plot feature importance
-ggplot(feature_importance_df, aes(x = reorder(Feature, IncNodePurity), y = IncNodePurity)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  coord_flip() +
-  labs(title = "Feature Importance in Predicting COVID-19 Deaths", x = "Feature", y = "Importance (IncNodePurity)") +
-  theme_minimal()
-```
-
-### **Feature Importance Interpretation**
-```{r feature-interpretation}
-# Display top important features
-feature_importance_df %>%
-  arrange(desc(IncNodePurity)) %>%
-  head(10)
-```
+#### First Image (Seasonality Components). Second Image (Actual vs Predicted Cases): Black Dots: Actual COVID-19 daily cases.Blue Line: Forecasted values with confidence intervals. ds = date stamp. y = responsive variable (daily covid cases).
 
 ## Conclusions, Biases
 
 ### COVID-19 was considered a serious global threat, and understanding its spread is crucial for epotential future infectious issues. This analysis examines how population size and case rates per thousand influence deaths per thousand across U.S. states. Using linear regression models, I generated state-level death rate predictions. However, the models could be significantly improved with additional predictors such as lockdown, masking, testing rates, vaccinations, and temperature.
+
+### Timeseries forecasting for the US states: I created a timeseries forecast as an aggregate of all the states. This hows a rise in cases in early 2020, peaks in 2021–2022, and then stabilizes. Cases increase early in the week (Monday–Wednesday) and drop on weekends (Saturday). eaks appear around April and December, which might align with holiday surges or seasonal COVID-19 waves. Actual vs Predicted Cases-> This model captures major COVID-19 waves (2021 & 2022 spikes). 
 
 ### A key source of bias in the data stems from inconsistencies in state-level reporting of cases and deaths, influenced by infrastructure limitations and reporting delays. Testing rates also introduce bias, as underreporting of asymptomatic or untested cases may lead to an underestimation of true infection rates. Additionally, my focus on U.S. data introduces personal bias, as a broader global dataset might yield different insights. The choice of an alpha level of 0.05 could also impact statistical conclusions.
 
